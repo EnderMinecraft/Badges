@@ -75,8 +75,18 @@ class IO(object):
 
         globals()['less'] = less
 
+    def suppress_function(self, target: Callable[..., Any], *args, **kwargs) -> Any:
+        """ Execute function and suppress its stdout and stderr.
+
+        :param Callable[..., Any] target: function
+        :return Any: function return value
+        """
+
+        with io.StringIO() as buf, redirect_stdout(buf), redirect_stderr(buf):
+            return target(*args, **kwargs)
+
     def print_function(self, target: Callable[..., Any], *args, **kwargs) -> Any:
-        """ Execute function and print its stdout.
+        """ Execute function and print its stdout and stderr.
 
         :param Callable[..., Any] target: function
         :return Any: function return value
