@@ -30,7 +30,7 @@ import getch
 from datetime import datetime
 from colorscript import ColorScript
 
-from typing import Callable, Any, Optional
+from typing import Callable, Any, Optional, Dict
 from contextlib import redirect_stdout, redirect_stderr
 
 from prompt_toolkit import PromptSession
@@ -39,59 +39,46 @@ from prompt_toolkit.formatted_text import ANSI
 
 
 class IO(object):
-    """ Subclass of badges module.
-
-    This subclass of badges module is intended for
-    providing an implementation of I/O.
-    """
+    """I/O implementation."""
 
     @staticmethod
     def set_log(log: str) -> None:
-        """ Set log path.
-
-        :param str log: log path
-        :return None: None
-        """
-
         globals()['log'] = log
 
     @staticmethod
     def set_history(history: str) -> None:
-        """ Set history path.
-
-        :param str history: history path
-        :return None: None
-        """
-
         globals()['history'] = history
 
     @staticmethod
     def set_less(less: bool) -> None:
-        """ Enable/disable less-like output.
-
-        :param bool less: True to enable, False to disable
-        :return None: None
-        """
-
         globals()['less'] = less
 
+    # NEW: global prompt-toolkit config for IO.input()
+    @staticmethod
+    def set_prompt_config(*, lexer=None, style=None, session_kwargs: Optional[Dict[str, Any]] = None) -> None:
+        globals()['ptk_lexer'] = lexer
+        globals()['ptk_style'] = style
+        globals()['ptk_session_kwargs'] = session_kwargs or {}
+
+        # If a session already exists, try to update it in-place.
+        sess = globals().get('prompt_session')
+        if sess is not None:
+            try:
+                if lexer is not None:
+                    sess.lexer = lexer
+            except Exception:
+                pass
+            try:
+                if style is not None:
+                    sess.style = style
+            except Exception:
+                pass
+
     def suppress_function(self, target: Callable[..., Any], *args, **kwargs) -> Any:
-        """ Execute function and suppress its stdout and stderr.
-
-        :param Callable[..., Any] target: function
-        :return Any: function return value
-        """
-
         with io.StringIO() as buf, redirect_stdout(buf), redirect_stderr(buf):
             return target(*args, **kwargs)
 
     def print_function(self, target: Callable[..., Any], *args, **kwargs) -> Any:
-        """ Execute function and print its stdout and stderr.
-
-        :param Callable[..., Any] target: function
-        :return Any: function return value
-        """
-
         with io.StringIO() as buf, redirect_stdout(buf), redirect_stderr(buf):
             result = target(*args, **kwargs)
             output = buf.getvalue()
@@ -101,19 +88,11 @@ class IO(object):
 
     @staticmethod
     def print_less(data: str) -> None:
-        """ Print data in less format.
-
-        :param str data: data to print
-        :return None: None
-        """
-
         try:
             columns, rows = os.get_terminal_size()
-
         except Exception:
             sys.stdout.write(data)
             sys.stdout.flush()
-
             return
 
         lines = data.split('\n')
@@ -160,25 +139,35 @@ class IO(object):
             end_index = start_index
 
     @staticmethod
-    def input(message: str = '', start: str = '%end', end: str = '', *args, **kwargs) -> None:
-        """ Input string.
-
-        :param str message: message to print
-        :param str start: string to print before the message
-        :param str end: string to print after the message
-        :return None: None
-        """
-
+    def _get_prompt_session() -> PromptSession:
         if 'prompt_session' not in globals():
-            history = globals().get('history', None)
+            history_path = globals().get('history', None)
 
-            if history:
+            # New configurable session kwargs
+            session_kwargs = dict(globals().get('ptk_session_kwargs', {}) or {})
+
+            lexer = globals().get('ptk_lexer', None)
+            style = globals().get('ptk_style', None)
+
+            if lexer is not None:
+                session_kwargs.setdefault('lexer', lexer)
+            if style is not None:
+                session_kwargs.setdefault('style', style)
+
+            if history_path:
                 globals()['prompt_session'] = PromptSession(
-                    history=FileHistory(history))
+                    history=FileHistory(history_path),
+                    **session_kwargs
+                )
             else:
-                globals()['prompt_session'] = PromptSession()
+                globals()['prompt_session'] = PromptSession(**session_kwargs)
 
-        session = globals()['prompt_session']
+        return globals()['prompt_session']
+
+    @staticmethod
+    def input(message: str = '', start: str = '%end', end: str = '', *args, **kwargs) -> None:
+        session = IO._get_prompt_session()
+
         line = ColorScript().parse(str(start) + str(message) + str(end))
         use_log = globals().get("log")
 
@@ -194,16 +183,6 @@ class IO(object):
     def print(self, message: str = '', start: str = '%remove%end', end: str = '%newline',
               time: bool = False, log: Optional[bool] = None,
               less: Optional[bool] = None) -> None:
-        """ Print string.
-
-        :param str message: message to print
-        :param str start: string to print before the message
-        :param str end: string to print after the message
-        :param bool time: show timestamp after start
-        :param Optional[bool] log: override global log
-        :param Optional[bool] less: override global less
-        :return None: None
-        """
 
         if time:
             start = str(start) + datetime.now().strftime('%H:%M:%S - ')
