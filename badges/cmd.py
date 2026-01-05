@@ -321,6 +321,12 @@ class Cmd(Tables, Badges):
                 continue_or_exit()
 
     def do_source(self, args: list) -> None:
+        """ Execute specific file as source.
+
+        :param list args: command arguments
+        :return None: None
+        """
+
         if len(args) < 2 or not args[1]:
             while True:
                 line = self._session.prompt(
@@ -342,15 +348,37 @@ class Cmd(Tables, Badges):
         self.print_error(f"Local file: {args[1]}: does not exist!")
 
     def do_exit(self, _) -> None:
+        """ Exit console.
+
+        :return None: None
+        :raises EOFError: EOF error
+        """
+
         raise EOFError
 
     def do_quit(self, _) -> None:
+        """ Exit console.
+
+        :return None: None
+        :raises EOFError: EOF error
+        """
+
         raise EOFError
 
     def do_clear(self, _) -> None:
+        """ Clear terminal window.
+
+        :return None: None
+        """
+
         self.print_empty('%clear', end='')
 
     def do_help(self, _) -> None:
+        """ Show all available commands.
+
+        :return None: None
+        """
+
         data = {}
         headers = ('Command', 'Description')
 
