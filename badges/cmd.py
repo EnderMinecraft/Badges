@@ -42,7 +42,8 @@ from typing import (
     Any,
     Optional,
     Tuple,
-    Union
+    Union,
+    Callable,
 )
 
 from prompt_toolkit import PromptSession
@@ -52,12 +53,20 @@ from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.formatted_text import ANSI
 
+# prompt-toolkit types (optional import safety)
+try:
+    from prompt_toolkit.lexers import Lexer
+except Exception:  # pragma: no cover
+    Lexer = Any  # type: ignore
+
+try:
+    from prompt_toolkit.styles import BaseStyle
+except Exception:  # pragma: no cover
+    BaseStyle = Any  # type: ignore
+
 
 def continue_or_exit() -> None:
-    """ Continue loading commands or exit.
-
-    :return None: None
-    """
+    """ Continue loading commands or exit. """
 
     sys.stdout.write("Press Enter to continue, or 'q' to quit:")
     sys.stdout.flush()
@@ -71,19 +80,9 @@ def continue_or_exit() -> None:
 
 
 class Command(Tables, Badges):
-    """ Subclass of badges module.
-
-    This subclass of badges module is a representation of
-    external command object.
-    """
+    """ External command object. """
 
     def __init__(self, info: dict = {}) -> None:
-        """ Initialize command
-
-        :param dict info: command details
-        :return None: None
-        """
-
         self.info = {
             'Category': "",
             'Name': "",
@@ -100,29 +99,14 @@ class Command(Tables, Badges):
 
     @staticmethod
     def complete() -> Union[dict, None]:
-        """ Provide autocomplete scheme.
-
-        :return dict: nested autocompletion scheme
-        """
-
         return
 
     def run(self, args: list) -> None:
-        """ Run this command.
-
-        :param list args: arguments
-        :return None: None
-        """
-
         return
 
 
 class Cmd(Tables, Badges):
-    """ Subclass of badges module.
-
-    This subclass of badges module is intended to provide
-    a wrapper for CLIs. Based on cmd.Cmd python module.
-    """
+    """ Wrapper for CLIs. Based on cmd.Cmd python module. """
 
     def __init__(self,
                  prompt: str = '%red$ %end',
@@ -132,19 +116,18 @@ class Cmd(Tables, Badges):
                  log: Optional[str] = None,
                  shorts: dict = {},
                  builtins: dict = {},
+                 # NEW: prompt-toolkit customization hooks
+                 lexer: Optional["Lexer"] = None,
+                 style: Optional["BaseStyle"] = None,
+                 session_kwargs: Optional[dict] = None,
                  **kwargs) -> None:
-        """ Initialize cmd.
+        """
+        Initialize cmd.
 
-        :param str prompt: prompt to apply
-        :param Optional[str] intro: message to print before loop
-        :param Optional[list] path: list of directories to load
-        commands from
-        :param Optional[str] history: history file path
-        :param Optional[str] log: log file path
-        :param dict shorts: dictionary of shortcuts
-        :param dict builtins: dictionary of built-ins
-        (e.g. ? for help, ! for commands, etc.)
-        :return None: None
+        New arguments:
+        - lexer: prompt_toolkit Lexer for live syntax highlighting
+        - style: prompt_toolkit Style/BaseStyle
+        - session_kwargs: dict merged into PromptSession constructor kwargs
         """
 
         self.intro = intro
@@ -169,17 +152,25 @@ class Cmd(Tables, Badges):
         for commands in path:
             self.load_external(commands, **kwargs)
 
+        # Build prompt session with overridable kwargs
+        base_kwargs = dict(
+            complete_while_typing=True,
+            auto_suggest=AutoSuggestFromHistory(),
+        )
+
+        if session_kwargs:
+            base_kwargs.update(session_kwargs)
+
         if history:
-            self._session = PromptSession(
-                history=FileHistory(history),
-                complete_while_typing=True,
-                auto_suggest=AutoSuggestFromHistory()
-            )
-        else:
-            self._session = PromptSession(
-                complete_while_typing=True,
-                auto_suggest=AutoSuggestFromHistory()
-            )
+            base_kwargs["history"] = FileHistory(history)
+
+        # Allow hooks at construction time
+        if lexer is not None:
+            base_kwargs["lexer"] = lexer
+        if style is not None:
+            base_kwargs["style"] = style
+
+        self._session = PromptSession(**base_kwargs)
 
         self.set_log(log)
 
@@ -194,12 +185,58 @@ class Cmd(Tables, Badges):
         }
         self.builtins.update(builtins)
 
-    def system(self, args: list) -> None:
-        """ Execute system commands.
+        # Optional: cached custom completer hook (so apps can override completely)
+        self._custom_completer_factory: Optional[Callable[[], Any]] = None
 
-        :param list args: arguments
-        :return None: None
+    # ----------------------------
+    # NEW: public prompt-session hooks
+    # ----------------------------
+
+    def get_session(self) -> PromptSession:
+        """Return the underlying PromptSession."""
+        return self._session
+
+    def configure_prompt(self,
+                         lexer: Optional["Lexer"] = None,
+                         style: Optional["BaseStyle"] = None,
+                         completer_factory: Optional[Callable[[], Any]] = None) -> None:
         """
+        Configure prompt-toolkit features at runtime.
+
+        - lexer: set live syntax highlighting lexer
+        - style: set prompt-toolkit style
+        - completer_factory: if provided, overrides loop() completer building
+          (useful if an app wants total control).
+        """
+        if lexer is not None:
+            try:
+                self._session.lexer = lexer
+            except Exception:
+                # prompt-toolkit allows lexer in constructor; assignment may fail on older versions
+                pass
+
+        if style is not None:
+            try:
+                self._session.style = style
+            except Exception:
+                pass
+
+        if completer_factory is not None:
+            self._custom_completer_factory = completer_factory
+
+    def set_lexer(self, lexer: "Lexer") -> None:
+        self.configure_prompt(lexer=lexer)
+
+    def set_style(self, style: "BaseStyle") -> None:
+        self.configure_prompt(style=style)
+
+    def set_completer(self, completer_factory: Callable[[], Any]) -> None:
+        self.configure_prompt(completer_factory=completer_factory)
+
+    # ----------------------------
+
+    def system(self, args: list) -> None:
+        """ Execute system commands. """
 
         if len(args) < 1:
             self.print_usage('!<command>')
@@ -209,62 +246,25 @@ class Cmd(Tables, Badges):
 
         try:
             subprocess.run(args)
-
         except Exception as e:
             self.print_error(f"Failed to execute: {str(e)}!")
             return
 
     def set_prompt(self, prompt: str) -> None:
-        """ Set prompt message.
-
-        :param str prompt: prompt message
-        :return None: None
-        """
-
         self.prompt = ColorScript().parse(prompt)
 
     def set_intro(self, intro: str) -> None:
-        """ Set intro message.
-
-        :param str intro: intro message
-        :return None: None
-        """
-
         self.intro = ColorScript().parse(intro)
 
     def delete_external(self, external: list) -> None:
-        """ Delete external commands.
-
-        :param list external: list containing commands
-        instances of Command
-        :return None: None
-        """
-
         for command in external:
             self.external.pop(command.info['Name'], None)
             self.complete.pop(command.info['Name'], None)
 
     def add_shortcut(self, alias: str, command: str, desc: str = "") -> None:
-        """ Add shortcut for command.
-
-        :param str alias: alias name
-        (e.g. kill)
-        :param str command: command
-        (e.g. jobs kill ?1)
-        :param str desc: description
-        :return None: None
-        """
-
         self.shorts[alias] = [command, desc]
 
     def add_external(self, external: list) -> None:
-        """ Add external commands.
-
-        :param list external: list containing commands
-        instances of Command
-        :return None: None
-        """
-
         for command in external:
             name = command.info['Name']
 
@@ -283,12 +283,6 @@ class Cmd(Tables, Badges):
                 self.complete[name] = None
 
     def load_external(self, path: str, **kwargs) -> None:
-        """ Load/reload external commands.
-
-        :param str path: path to load from
-        :return None: None
-        """
-
         if not os.path.exists(path):
             return
 
@@ -299,24 +293,24 @@ class Cmd(Tables, Badges):
             try:
                 commands = path + '/' + file
                 spec = importlib.util.spec_from_file_location(commands, commands)
-                object = importlib.util.module_from_spec(spec)
+                obj = importlib.util.module_from_spec(spec)
 
-                spec.loader.exec_module(object)
-                object = object.ExternalCommand()
+                spec.loader.exec_module(obj)
+                obj = obj.ExternalCommand()
 
                 for attr, sub in kwargs.items():
-                    setattr(object, attr, sub)
+                    setattr(obj, attr, sub)
 
-                name = object.info['Name']
+                name = obj.info['Name']
 
-                self.external[name] = object.info
-                self.external[name].update({'Method': object.run})
+                self.external[name] = obj.info
+                self.external[name].update({'Method': obj.run})
                 self.complete[name] = {}
 
-                self.shorts.update(object.info['Shorts'])
+                self.shorts.update(obj.info['Shorts'])
 
-                if object.complete() is not None:
-                    self.dynamic_complete[name] = object.complete
+                if obj.complete() is not None:
+                    self.dynamic_complete[name] = obj.complete
 
                 if not self.complete[name]:
                     self.complete[name] = None
@@ -327,12 +321,6 @@ class Cmd(Tables, Badges):
                 continue_or_exit()
 
     def do_source(self, args: list) -> None:
-        """ Execute specific file as source.
-
-        :param list args: command arguments
-        :return None: None
-        """
-
         if len(args) < 2 or not args[1]:
             while True:
                 line = self._session.prompt(
@@ -349,43 +337,20 @@ class Cmd(Tables, Badges):
         if os.path.exists(args[1]) and not os.path.isdir(args[1]):
             self.print_process(f"Executing from file: {args[1]}%newline")
             self.source = open(args[1], 'r').read().split('\n')
-
             return
 
         self.print_error(f"Local file: {args[1]}: does not exist!")
 
     def do_exit(self, _) -> None:
-        """ Exit console.
-
-        :return None: None
-        :raises EOFError: EOF error
-        """
-
         raise EOFError
 
     def do_quit(self, _) -> None:
-        """ Exit console.
-
-        :return None: None
-        :raises EOFError: EOF error
-        """
-
         raise EOFError
 
     def do_clear(self, _) -> None:
-        """ Clear terminal window.
-
-        :return None: None
-        """
-
         self.print_empty('%clear', end='')
 
     def do_help(self, _) -> None:
-        """ Show all available commands.
-
-        :return None: None
-        """
-
         data = {}
         headers = ('Command', 'Description')
 
@@ -394,9 +359,7 @@ class Cmd(Tables, Badges):
                 data['core'] = []
 
             description = getattr(self, 'do_' + command).__doc__.strip().split('\n')[0]
-
-            data['core'].append((
-                command, description))
+            data['core'].append((command, description))
 
         for command in sorted(self.external):
             category = self.external[command]['Category']
@@ -418,8 +381,7 @@ class Cmd(Tables, Badges):
             if not alias:
                 continue
 
-            data[alias['Category']].append(
-                (command, self.shorts[command][1]))
+            data[alias['Category']].append((command, self.shorts[command][1]))
 
         buffer = ''
 
@@ -431,22 +393,14 @@ class Cmd(Tables, Badges):
         self.print_empty(buffer, end='')
 
     def verify_command(self, args: list) -> Tuple[bool, Union[str, list, None]]:
-        """ Check if command or shortcut exists.
-
-        :param list args: list of args
-        :return Tuple[bool, Union[str, list, None]]: None if not found or tuple of status and if command is single,
-            object, otherwise list of similar commands.
-        """
-
         commands = {}
 
-        for name, object in self.external.items():
+        for name, obj in self.external.items():
             for i in range(len(name) + 1):
                 prefix = name[:i]
 
                 if prefix not in commands:
                     commands[prefix] = name
-
                 elif commands[prefix] != name:
                     commands[prefix] = None
 
@@ -458,22 +412,14 @@ class Cmd(Tables, Badges):
         if result:
             return True, result
 
-        else:
-            conflict = [name for name, object in self.external.items() if name.startswith(args[0])]
+        conflict = [name for name, obj in self.external.items() if name.startswith(args[0])]
 
-            if args[0] in conflict:
-                return True, args[0]
+        if args[0] in conflict:
+            return True, args[0]
 
-            return False, conflict
+        return False, conflict
 
     def verify_args(self, args: list, info: dict) -> None:
-        """ Check if arguments correct for command.
-
-        :param list args: list of args
-        :param dict info: dictionary of command info
-        :return None: None
-        """
-
         if not info['Options']:
             if len(args) - 1 < info['MinArgs']:
                 self.print_usage(info['Usage'])
@@ -510,11 +456,6 @@ class Cmd(Tables, Badges):
             return
 
     def loop(self) -> None:
-        """ Run main loop.
-
-        :return None: None
-        """
-
         self.preloop()
 
         if self.intro:
@@ -526,9 +467,17 @@ class Cmd(Tables, Badges):
                     self.complete[name] = completer()
 
                 if not self.source:
+                    # Build completer unless user overrides it
+                    if self._custom_completer_factory is not None:
+                        completer_obj = self._custom_completer_factory()
+                    else:
+                        completer_obj = NestedCompleter.from_nested_dict(self.complete)
+
                     with patch_stdout(raw=True):
                         line = self._session.prompt(
-                            ANSI(self.prompt), completer=NestedCompleter.from_nested_dict(self.complete))
+                            ANSI(self.prompt),
+                            completer=completer_obj
+                        )
                 else:
                     line = self.source.pop(0)
 
@@ -566,37 +515,15 @@ class Cmd(Tables, Badges):
         self.postloop()
 
     def preloop(self) -> None:
-        """ Do something before cmdloop.
-
-        :return None: None
-        """
-
         return
 
     def postloop(self) -> None:
-        """ Do something after cmdloop.
-
-        :return None: None
-        """
-
         return
 
     def precmd(self, line: str) -> str:
-        """ Do something before executing command.
-
-        :param str line: command line
-        :return str: command
-        """
-
         return line
 
     def postcmd(self, line: str) -> None:
-        """ Do something after command execution.
-
-        :param str line: command line
-        :return None: None
-        """
-
         return
 
     def onecmd(self, line: str) -> str:
@@ -606,11 +533,19 @@ class Cmd(Tables, Badges):
         :return str: command result
         """
 
+        raw_line = line  # <-- preserve the original line (with quotes, escapes, spacing)
+
         try:
             args = shlex.split(line)
 
         except ValueError as e:
             self.print_error(f"Error parsing command: {str(e)}")
+            # If parsing fails, still pass raw line to default handler.
+            try:
+                self.default([], raw_line=raw_line)  # <-- new kwarg
+            except TypeError:
+                self.default([])  # backward compat
+            return line
 
         if len(args) < 1:
             return line
@@ -673,22 +608,18 @@ class Cmd(Tables, Badges):
         if name is not None:
             self.print_warning(f"Did you mean? {', '.join(name)}")
 
-        self.default(args)
+        # IMPORTANT: when falling back to default(), pass raw line too
+        try:
+            self.default(args, raw_line=raw_line)  # <-- new kwarg
+        except TypeError:
+            # Backward compatibility: older defaults accept only (args)
+            self.default(args)
+
         return line
 
     def emptyline(self) -> None:
-        """ Do something on empty line.
-
-        :return None: None
-        """
-
         return
 
-    def default(self, args: list) -> Any:
-        """ Failure handle.
-
-        :param list args: list of args
-        :return Any: command result
-        """
-
+    def default(self, args: list, raw_line: str = "") -> Any:
         self.print_error(f"Unrecognized command: {args[0]}")
+
