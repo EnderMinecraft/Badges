@@ -616,6 +616,9 @@ class Cmd(Tables, Badges):
             return line
 
         for builtin, func in self.builtins.items():
+            if not func:
+                continue
+
             if args[0].startswith(builtin):
                 first = args[0].lstrip(builtin)
                 prepend = []
