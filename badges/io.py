@@ -118,7 +118,7 @@ class IO(object):
             user_input = ''
 
             while user_input not in ['\n', 'q', ' ', 'a']:
-                user_input = getch.getch()
+                user_input = getch()
 
             sys.stdout.write(ColorScript().parse('%remove'))
             sys.stdout.flush()
