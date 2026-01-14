@@ -25,7 +25,7 @@ SOFTWARE.
 import os
 import io
 import sys
-import getch
+from msvcrt import getch
 import shlex
 import traceback
 import argparse
@@ -73,7 +73,7 @@ def continue_or_exit() -> None:
 
     user_input = ''
     while user_input not in ['\n', 'q']:
-        user_input = getch.getch()
+        user_input = getch()
 
     if user_input == 'q':
         sys.exit(0)
