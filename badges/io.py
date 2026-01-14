@@ -25,7 +25,7 @@ SOFTWARE.
 import os
 import io
 import sys
-import getch
+from msvcrt import getch
 
 from datetime import datetime
 from colorscript import ColorScript
